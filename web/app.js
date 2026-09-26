@@ -541,6 +541,15 @@ async function boot() {
     els.from.value = '';
     schedule(0);
   });
+  // A pasted link changes only the hash; follow it. (Our own updates use
+  // history.replaceState, which doesn't fire this.)
+  window.addEventListener('hashchange', () => {
+    const next = readHash();
+    if (!next) return;
+    state = next;
+    syncForm();
+    schedule(0);
+  });
   els.copy.addEventListener('click', copySentence);
   els.almanac.addEventListener('pointermove', onPointerMove);
   els.almanac.addEventListener('pointerleave', hideTip);

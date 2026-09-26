@@ -106,6 +106,10 @@ test('the almanac works in a real browser', { skip: plan.skip, timeout: 180000 }
         assert.match(r.s, /At 09:00, Monday through Friday/);
         assert.equal(r.z, 'Asia/Kolkata');
         assert.equal(r.n, 2);
+        // A link pasted into the same tab changes only the hash.
+        await page.evaluate(`location.hash = 'e=' + encodeURIComponent('*/15 * * * *') + '&z=UTC&m=shared'`);
+        await page.waitFor(`document.getElementById('sentence').textContent.includes('Every 15 minutes')`);
+        assert.equal(await page.evaluate(`document.querySelectorAll('.plate').length`), 1);
       }));
 
     await t.test('keyboard: skip link first, then the controls, with a visible focus ring', () =>
