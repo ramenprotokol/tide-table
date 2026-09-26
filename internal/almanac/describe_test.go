@@ -38,6 +38,17 @@ func TestDescribe(t *testing.T) {
 		// Both day fields restricted: cron (and robfig/cron) matches EITHER.
 		{"0 0 1 * 1", "At 00:00, on the 1st of every month, and also every Monday (cron matches either day rule)"},
 		{"0 9 1-31 * 1-5", "At 09:00, every day (with both day fields set, cron matches either, and one covers every day)"},
+		// Either-rule with chosen months: both rules read within those months.
+		{"0 0 1,15 6 1", "At 00:00, on the 1st and 15th of June, and also every Monday in June (cron matches either day rule)"},
+		{"0 0 1,15 3-5 1", "At 00:00, on the 1st and 15th of March through May, and also every Monday from March through May (cron matches either day rule)"},
+		{"0 0 29 2 1", "At 00:00, on 29 February, and also every Monday in February (cron matches either day rule)"},
+		{"0 0 1 3-5 *", "At 00:00, on the 1st of March through May"},
+		{"0 12 * 2 0", "At 12:00, every Sunday in February"},
+		{"0 12 * JAN-MAR MON-FRI", "At 12:00, Monday through Friday from January through March"},
+		// Runs of minutes read as ranges.
+		{"0-10 * * * *", "Every hour, at minutes :00 through :10"},
+		{"0-10,30 * * * *", "Every hour, at minutes :00 through :10 and :30"},
+		{"0-10 9-17 * * *", "At minutes :00 through :10 past each hour from 09:00 through 17:10, every day"},
 	}
 	for _, c := range cases {
 		s, err := Parse(c.expr)

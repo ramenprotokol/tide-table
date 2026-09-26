@@ -167,6 +167,9 @@ func describeTime(minBits, hourBits uint64) (string, bool) {
 		case everyN != "":
 			return everyN, true
 		}
+		if l := minuteList(mins); strings.HasPrefix(l, "minutes") {
+			return "Every hour, at " + l, true
+		}
 		return "Every hour at " + minuteList(mins), true
 	}
 
@@ -205,15 +208,29 @@ func describeTime(minBits, hourBits uint64) (string, bool) {
 	return fmt.Sprintf("At %s past hours %s", minuteList(mins), joinAnd(hl)), false
 }
 
+// minuteList names the minutes of an hour: ":05, :20 and :50", or with runs
+// "minutes :00 through :10 and :30".
 func minuteList(mins []int) string {
-	if len(mins) > 8 {
-		return fmt.Sprintf("%d set minutes (:%02d to :%02d)", len(mins), mins[0], mins[len(mins)-1])
+	var parts []string
+	ranged := false
+	for _, r := range runs(mins) {
+		switch {
+		case r[1]-r[0] >= 2:
+			parts = append(parts, fmt.Sprintf(":%02d through :%02d", r[0], r[1]))
+			ranged = true
+		case r[1] > r[0]:
+			parts = append(parts, fmt.Sprintf(":%02d", r[0]), fmt.Sprintf(":%02d", r[1]))
+		default:
+			parts = append(parts, fmt.Sprintf(":%02d", r[0]))
+		}
 	}
-	var ml []string
-	for _, m := range mins {
-		ml = append(ml, fmt.Sprintf(":%02d", m))
+	switch {
+	case ranged && len(parts) <= 4:
+		return "minutes " + joinAnd(parts)
+	case !ranged && len(parts) <= 8:
+		return joinAnd(parts)
 	}
-	return joinAnd(ml)
+	return fmt.Sprintf("%d set minutes (:%02d to :%02d)", len(mins), mins[0], mins[len(mins)-1])
 }
 
 // describeDays covers day of month, month and day of week, following
@@ -238,7 +255,7 @@ func describeDays(s *cron.SpecSchedule) (string, bool) {
 	weekdays := func() string {
 		p := describeDows(dows)
 		if !allMonths {
-			p += ", " + describeMonths(months)
+			p += " " + inMonths(months)
 		}
 		return p
 	}
@@ -267,9 +284,11 @@ func describeDays(s *cron.SpecSchedule) (string, bool) {
 	if allDoms || allDows {
 		return everyDay() + " (with both day fields set, cron matches either, and one covers every day)", false
 	}
-	p := fmt.Sprintf("on %s, and also %s", domOfMonths(doms, allMonthList()), strings.TrimPrefix(describeDows(dows), "on "))
+	// Each rule is read within the chosen months: "the 1st and 15th of June,
+	// and also every Monday in June".
+	p := fmt.Sprintf("on %s, and also %s", domOfMonths(doms, months), strings.TrimPrefix(describeDows(dows), "on "))
 	if !allMonths {
-		p += ", " + describeMonths(months)
+		p += " " + inMonths(months)
 	}
 	return p + " (cron matches either day rule)", false
 }
@@ -309,11 +328,13 @@ func inMonths(months []int) string {
 	return "in " + joinAnd(names)
 }
 
+// describeMonths names months without a preposition: "June", "March through
+// May", "January, April, July and October".
 func describeMonths(months []int) string {
 	if len(months) >= 3 && contiguous(months) {
 		return fmt.Sprintf("%s through %s", monthNames[months[0]], monthNames[months[len(months)-1]])
 	}
-	return "in " + strings.TrimPrefix(inMonths(months), "in ")
+	return strings.TrimPrefix(inMonths(months), "in ")
 }
 
 // domOfMonths: "the 1st of every month", "1 January", "the 1st and 15th of
@@ -343,7 +364,7 @@ func domOfMonths(doms, months []int) string {
 	if len(doms) == 1 && len(months) == 1 {
 		return fmt.Sprintf("%d %s", doms[0], monthNames[months[0]])
 	}
-	return dayText + " of " + strings.TrimPrefix(inMonths(months), "in ")
+	return dayText + " of " + describeMonths(months)
 }
 
 func anyDateExists(doms, months []int) bool {

@@ -182,6 +182,94 @@ func TestLordHoweHalfHour(t *testing.T) {
 	noSeam(t, res.Views[0], "double")
 }
 
+// robfig/cron's hour-by-hour search lands on :30 after a 30-minute change, so
+// on both change days it passes over 12:00, which does happen. The seam must
+// say so, not claim the time is missing or repeated.
+func TestLordHoweQuirkExplained(t *testing.T) {
+	res, _ := mustCompute(t, Request{Expr: "0 12 * * *", Zones: []string{"Australia/Lord_Howe"}, From: "2026-09"})
+	v := res.Views[0]
+	if v.Total != 363 {
+		t.Errorf("total %d, want 363 (12:00 passed over on both change days)", v.Total)
+	}
+	for _, c := range []struct{ date, steps string }{
+		{"Sun 4 Oct 2026", "(01:00, 02:30, 03:30, …)"},
+		{"Sun 4 Apr 2027", "(01:00, 01:30, 02:30, …)"},
+	} {
+		s := seamOn(t, v, c.date, "skip")
+		want := "12:00 does happen that day, but robfig/cron skips it: its search moves an hour at a time " + c.steps + ", so after this change of 30 minutes it never looks at 12:00. This is a library quirk, not a missing time."
+		if !strings.Contains(s.Text, want) {
+			t.Errorf("%s:\n got %s\nwant …%s", c.date, s.Text, want)
+		}
+		for _, bad := range []string{"doesn’t happen", "happens twice"} {
+			if strings.Contains(s.Text, bad) {
+				t.Errorf("%s: says %q: %s", c.date, bad, s.Text)
+			}
+		}
+		if s.Label != "12:00 skipped" {
+			t.Errorf("%s label %q", c.date, s.Label)
+		}
+	}
+
+	// 01:30 fires as usual on 4 Oct, and then an extra run at 02:30.
+	res, _ = mustCompute(t, Request{Expr: "30 1 * * *", Zones: []string{"Australia/Lord_Howe"}, From: "2026-09"})
+	v = res.Views[0]
+	s := seamOn(t, v, "Sun 4 Oct 2026", "extra")
+	if s.Label != "02:30 extra run" || !strings.Contains(s.Text, "robfig/cron also fires at 02:30, which the expression doesn’t name: an extra run.") {
+		t.Errorf("extra run seam: %q %s", s.Label, s.Text)
+	}
+	if strings.Contains(string(res.JSON()), "moved") {
+		t.Error("an extra run is described as moved")
+	}
+	if v.Counts[33] != 2 {
+		t.Errorf("4 Oct count %d, want 2", v.Counts[33])
+	}
+
+	// A time that really is in the gap still reads as missing.
+	res, _ = mustCompute(t, Request{Expr: "15 2 * * *", Zones: []string{"Australia/Lord_Howe"}, From: "2026-09"})
+	if s := seamOn(t, res.Views[0], "Sun 4 Oct 2026", "skip"); !strings.Contains(s.Text, "02:00–02:29 doesn’t happen, so robfig/cron skips the 02:15 firing.") {
+		t.Errorf("gap text: %s", s.Text)
+	}
+
+	// The drift can carry to a later day: @monthly passes over 1 November.
+	res, _ = mustCompute(t, Request{Expr: "@monthly", Zones: []string{"Australia/Lord_Howe"}, From: "2028-06"})
+	v = res.Views[0]
+	if v.Total != 10 {
+		t.Errorf("@monthly from 2028-06: %d firings, want 10", v.Total)
+	}
+	s = seamOn(t, v, "Wed 1 Nov 2028", "skip")
+	if !s.Red || !strings.Contains(s.Text, "robfig/cron looked for this run by searching on from the previous run, Sun 1 Oct 2028 at 00:00, across the clock change on Sun 1 Oct 2028 (+1030 becomes +11)") {
+		t.Errorf("carried skip: %s", s.Text)
+	}
+	for _, sm := range v.Seams {
+		if strings.Contains(sm.Text, "No clock change explains it") {
+			t.Errorf("unexplained seam on %s: %s", sm.Date, sm.Text)
+		}
+	}
+}
+
+// Asunción's midnight change sends the library's month search past all of
+// November 2023: one seam for the run of days, not thirty.
+func TestCarriedSkipsGrouped(t *testing.T) {
+	res, _ := mustCompute(t, Request{Expr: "0 12 * 11 *", Zones: []string{"America/Asuncion"}, From: "2023-01"})
+	v := res.Views[0]
+	if v.Total != 0 {
+		t.Errorf("total %d, want 0", v.Total)
+	}
+	s := seamOn(t, v, "Wed 1 Nov 2023", "skip")
+	if s.Label != "12:00 skipped, 30 days" || !strings.Contains(s.Text, "From Wed 1 Nov 2023 to Thu 30 Nov 2023 (30 days), robfig/cron skips 12:00 each day.") || !strings.Contains(s.Text, "from the start of this almanac") {
+		t.Errorf("grouped seam: %q %s", s.Label, s.Text)
+	}
+	red := 0
+	for _, sm := range v.Seams {
+		if sm.Red {
+			red++
+		}
+	}
+	if red != 1 {
+		t.Errorf("%d red seams, want 1", red)
+	}
+}
+
 // Pacific/Chatham (UTC+12:45) jumps from 02:45 to 03:45.
 func TestChathamQuarterHourZone(t *testing.T) {
 	res, _ := mustCompute(t, Request{Expr: "0 3 * * *", Zones: []string{"Pacific/Chatham"}, From: "2026-09"})
@@ -279,60 +367,6 @@ func TestNextFlagsRepeats(t *testing.T) {
 	}
 	if ldn[0].Time != "05:30" || ldn[1].Time != "06:30" || ldn[0].Abbr != "GMT" {
 		t.Errorf("London readings: %+v %+v", ldn[0], ldn[1])
-	}
-}
-
-// Every firing still comes from the library: the fast walk (fixed-offset
-// zones between clock changes, 59-second stride) must equal the plainest
-// possible walk (real zone throughout, Next from each firing itself).
-func TestFastWalkMatchesPlainLibraryWalk(t *testing.T) {
-	exprs := []string{"30 2 * * *", "30 1 * * *", "0 * * * *", "*/15 * * * *", "0 0 * * *", "15 2 * * *", "45 1 * * *", "0 3 * * *", "0 9 * * 1-5", "0 0 1 * *", "*/7 1-3 * * *", "59 23 L * *"}
-	zones := []string{"America/New_York", "Europe/London", "Australia/Sydney", "Australia/Lord_Howe", "Pacific/Chatham", "America/Havana", "America/Santiago", "Asia/Beirut", "Africa/Casablanca", "Asia/Kolkata", "UTC"}
-	for _, expr := range exprs {
-		s, err := Parse(expr)
-		if err != nil {
-			continue // "L" isn't standard cron; the parser rejects it
-		}
-		for _, z := range zones {
-			loc, err := LoadZone(z)
-			if err != nil {
-				t.Fatal(err)
-			}
-			a := startOfDay(loc, 2026, 9, 1)
-			b := startOfDay(loc, 2027, 9, 1)
-			spec := *s.Spec
-			spec.Location = loc
-			plain := walk(&spec, a, b, 0)
-			fast := walkSegmented(spec, loc, a, b, clockChanges(loc, a, b))
-			if !equal64(plain, fast) {
-				t.Errorf("%s in %s: plain walk %d firings, fast walk %d", expr, z, len(plain), len(fast))
-			}
-		}
-	}
-}
-
-// The densest schedule, around each clock change, in two awkward zones.
-func TestFastWalkEveryMinuteAroundChanges(t *testing.T) {
-	s, _ := Parse("* * * * *")
-	for _, z := range []string{"America/New_York", "Australia/Lord_Howe"} {
-		loc, _ := LoadZone(z)
-		a, b := startOfDay(loc, 2026, 9, 1), startOfDay(loc, 2027, 9, 1)
-		for _, c := range clockChanges(loc, a, b) {
-			lo, hi := c.at-3*86400, c.at+3*86400
-			spec := *s.Spec
-			spec.Location = loc
-			plain := walk(&spec, lo, hi, 0)
-			fast := walkSegmented(spec, loc, lo, hi, clockChanges(loc, lo, hi))
-			if !equal64(plain, fast) {
-				t.Errorf("every minute in %s around %s: %d vs %d firings", z, time.Unix(c.at, 0).UTC(), len(plain), len(fast))
-			}
-			// Six days of absolute time hold 8,640 minutes whatever the clocks
-			// do: the skipped wall minutes never exist as instants, and the
-			// repeated ones are distinct instants.
-			if want := 6 * 1440; len(plain) != want {
-				t.Errorf("every minute in %s around %s: %d firings, want %d", z, time.Unix(c.at, 0).UTC(), len(plain), 6*1440)
-			}
-		}
 	}
 }
 

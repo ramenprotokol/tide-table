@@ -86,6 +86,7 @@ func (r *Result) JSON() []byte {
 		field{"perDay", func() { w.int(int64(r.PerDay)) }, false},
 		field{"never", func() { w.bool(r.Never) }, false},
 		field{"walked", func() { w.int(int64(r.Walked)) }, false},
+		field{"truncated", func() { w.bool(r.Truncated) }, false},
 		field{"views", func() { arr(w, r.Views, func(v View) { v.write(w) }) }, false},
 	)
 	return w.b

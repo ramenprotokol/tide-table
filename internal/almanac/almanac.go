@@ -12,7 +12,7 @@ import (
 
 // Limits. Work is bounded by construction: at most MaxZones zones, one
 // 12-month window each, and a five-field cron fires at most once a minute
-// (527,040 times in a leap year). maxWalk is a backstop above that.
+// (527,040 times in a leap year). maxWalk (walk.go) is a backstop above that.
 const (
 	MaxZones    = 3
 	NextCount   = 10
@@ -24,14 +24,7 @@ const (
 	maxMarks    = 48
 	maxWallList = 12
 	maxTimes    = 4
-	maxWalk     = 1440 * 370
 )
-
-// walkStride is how far past each firing the walk asks Next to start. Five-
-// field cron only fires at second 0, so starting 59 s later returns the same
-// next firing while skipping the library's second-by-second scan. A test walks
-// with a stride of 0 and checks the results are identical.
-var walkStride = 59 * time.Second
 
 // Request is one almanac query.
 type Request struct {
@@ -63,7 +56,8 @@ type Result struct {
 	From        string      `json:"from"`
 	PerDay      int         `json:"perDay"` // firings on a matching day with no clock change
 	Never       bool        `json:"never"`
-	Walked      int         `json:"walked"` // firings walked with the library's Next
+	Walked      int         `json:"walked"`    // firings walked with the library's Next
+	Truncated   bool        `json:"truncated"` // a walk hit its backstop, so the almanac is incomplete
 	Views       []View      `json:"views"`
 }
 
@@ -103,12 +97,12 @@ type Month struct {
 type Mark struct {
 	Day    int    `json:"day"`
 	Minute int    `json:"minute"`
-	Kind   string `json:"kind"` // skip, double, moved
+	Kind   string `json:"kind"` // skip, double, extra
 }
 
 // Seam is a clock change drawn across the year strip.
 type Seam struct {
-	Kind   string `json:"kind"` // skip, double, moved, shift, quiet
+	Kind   string `json:"kind"` // skip, double, extra, loop, shift, quiet
 	Red    bool   `json:"red"`
 	Day    int    `json:"day"`
 	Minute int    `json:"minute"`
@@ -189,6 +183,8 @@ type runState struct {
 	spec     cron.SpecSchedule
 	a, b     int64 // walk range
 	firings  []int64
+	loops    []loop
+	trunc    bool
 	anoms    []*anomaly
 	changes  []change
 	next     []int64
@@ -306,8 +302,9 @@ func compute(req Request) (*Result, map[string]*runState) {
 		if r == nil || r.firings != nil {
 			continue
 		}
-		r.prepare(sched.Spec, now)
+		r.prepare(now)
 		res.Walked += len(r.firings)
+		res.Truncated = res.Truncated || r.trunc
 	}
 
 	for _, v := range views {
@@ -320,69 +317,6 @@ func compute(req Request) (*Result, map[string]*runState) {
 		}
 	}
 	return res, runs
-}
-
-// walk lists every firing in [a, b) using the library's Next.
-func walk(spec *cron.SpecSchedule, a, b int64, stride time.Duration) []int64 {
-	out := []int64{}
-	t := spec.Next(time.Unix(a-1, 0))
-	for !t.IsZero() && t.Unix() < b && len(out) < maxWalk {
-		out = append(out, t.Unix())
-		t = spec.Next(t.Add(stride))
-	}
-	return out
-}
-
-// guard is how far either side of a clock change the walk uses the real zone.
-const guard = 2 * 86400
-
-// walkSegmented returns exactly what walk returns with the real zone, faster.
-// Go's embedded tz data is "slim": for future dates every offset lookup
-// re-derives the zone’s rule, and robfig/cron’s Next does many lookups per
-// call. Between clock changes the offset is constant, so there the library is
-// handed a fixed-offset zone with that same offset (identical wall clock);
-// within two days of each change it gets the real zone. A test checks the two
-// walks match firing for firing.
-func walkSegmented(spec cron.SpecSchedule, loc *time.Location, a, b int64, changes []change) []int64 {
-	type seg struct {
-		s, e int64
-		real bool
-	}
-	var segs []seg
-	cur := a
-	for _, c := range changes {
-		lo, hi := max(c.at-guard, a), min(c.at+guard, b)
-		if lo > cur {
-			segs = append(segs, seg{cur, lo, false})
-		}
-		if len(segs) > 0 && segs[len(segs)-1].real && segs[len(segs)-1].e >= lo {
-			segs[len(segs)-1].e = max(segs[len(segs)-1].e, hi)
-		} else {
-			segs = append(segs, seg{max(lo, cur), hi, true})
-		}
-		cur = max(cur, hi)
-	}
-	if cur < b {
-		segs = append(segs, seg{cur, b, false})
-	}
-	out := []int64{}
-	for _, sg := range segs {
-		if sg.s >= sg.e {
-			continue
-		}
-		sp := spec
-		if sg.real {
-			sp.Location = loc
-		} else {
-			p := periodAt(loc, sg.s)
-			sp.Location = time.FixedZone(p.abbr, p.off)
-		}
-		out = append(out, walk(&sp, sg.s, sg.e, walkStride)...)
-		if len(out) >= maxWalk {
-			return out[:maxWalk]
-		}
-	}
-	return out
 }
 
 // dateMatches mirrors robfig/cron’s month and dayMatches rules for a civil date.
@@ -406,25 +340,30 @@ type anomaly struct {
 	c        *change // nil if no clock change explains it
 	day      int64
 	skipped  []int     // wall minutes (run zone) that did not fire
+	skipDay  []int64   // the civil day of each skipped minute
 	repeated []int     // wall minutes that fired more than once
 	repInst  [][]int64 // the instants of each repeated minute
 	extra    []int     // wall minutes that fired but the expression doesn’t name
 	extraAt  []int64
+	loops    []loop // where Next didn't move on (shown once)
+	loopWall []int  // the wall minute of each loop's firing
 }
 
 func (a *anomaly) kind() string {
 	switch {
-	case len(a.extra) > 0:
-		return "moved"
+	case len(a.loops) > 0:
+		return "loop"
 	case len(a.skipped) > 0:
 		return "skip"
 	case len(a.repeated) > 0:
 		return "double"
+	case len(a.extra) > 0:
+		return "extra"
 	}
 	return "quiet"
 }
 
-func (r *runState) prepare(spec *cron.SpecSchedule, now int64) {
+func (r *runState) prepare(now int64) {
 	// Extend the walk to whole days on the run zone’s own clock, so each of
 	// its dates can be compared with the expression in full.
 	ca, cb := cursor{loc: r.loc}, cursor{loc: r.loc}
@@ -436,19 +375,32 @@ func (r *runState) prepare(spec *cron.SpecSchedule, now int64) {
 	r.b = startOfDay(r.loc, y, m, d)
 
 	r.changes = clockChanges(r.loc, r.a, r.b)
-	r.firings = walkSegmented(r.spec, r.loc, r.a, r.b, r.changes)
+	w := walkWith(newFastNext(r.spec, r.loc).next, r.a, r.b)
+	r.firings, r.loops, r.trunc = w.firings, w.loops, w.truncated
 	r.classify(dayA, dayB)
 
-	// The next firings from now, straight from the library.
-	t := time.Unix(now, 0)
-	for len(r.next) < NextCount {
-		t = r.spec.Next(t)
-		if t.IsZero() {
-			break
+	// The next firings from now, straight from the library (real zone).
+	next := libraryNext(r.spec, r.loc)
+	u, ok, _ := step(next, now)
+	for ok && len(r.next) < NextCount {
+		r.next = append(r.next, u)
+		var lp *loop
+		u, ok, lp = step(next, u)
+		note := ""
+		if lp != nil {
+			note = "loop:" + fmtMinute(wallMinute(r.loc, lp.until))
+		} else if !matchesAt(&r.spec, time.Unix(r.next[len(r.next)-1], 0).In(r.loc)) {
+			note = "extra"
+		} else {
+			note = repeatNote(r.loc, r.next[len(r.next)-1])
 		}
-		r.next = append(r.next, t.Unix())
-		r.nextNote = append(r.nextNote, repeatNote(r.loc, t.Unix()))
+		r.nextNote = append(r.nextNote, note)
 	}
+}
+
+// wallMinute is u's minute of the day on loc's clock.
+func wallMinute(loc *time.Location, u int64) int {
+	return int(floorMod(u+int64(periodAt(loc, u).off), 86400) / 60)
 }
 
 // repeatNote says whether a firing's wall time is one that occurs twice
@@ -494,6 +446,13 @@ func (r *runState) classify(dayA, dayB int64) {
 	}
 	perDay := count(r.spec.Hour) * count(r.spec.Minute)
 	suspect := map[int64]bool{}
+	loopsOn := map[int64][]loop{}
+	lc := cursor{loc: r.loc}
+	for _, lp := range r.loops {
+		d := civilDay(lp.at+int64(lc.at(lp.at).off)) - dayA
+		loopsOn[d] = append(loopsOn[d], lp)
+		suspect[d] = true
+	}
 	for d := int64(0); d < int64(n); d++ {
 		want := 0
 		if dateMatches(&r.spec, dayA+d) {
@@ -546,7 +505,7 @@ func (r *runState) classify(dayA, dayB int64) {
 				extra = append(extra, mnt)
 			}
 		}
-		if len(skipped)+len(repeated)+len(extra) == 0 {
+		if len(skipped)+len(repeated)+len(extra)+len(loopsOn[d]) == 0 {
 			continue
 		}
 		ci, ok := touched[d]
@@ -563,6 +522,9 @@ func (r *runState) classify(dayA, dayB int64) {
 			r.anoms = append(r.anoms, a)
 		}
 		a.skipped = append(a.skipped, skipped...)
+		for range skipped {
+			a.skipDay = append(a.skipDay, dayA+d)
+		}
 		for _, mnt := range repeated {
 			a.repeated = append(a.repeated, mnt)
 			a.repInst = append(a.repInst, fired[mnt])
@@ -570,6 +532,10 @@ func (r *runState) classify(dayA, dayB int64) {
 		for _, mnt := range extra {
 			a.extra = append(a.extra, mnt)
 			a.extraAt = append(a.extraAt, fired[mnt]...)
+		}
+		for _, lp := range loopsOn[d] {
+			a.loops = append(a.loops, lp)
+			a.loopWall = append(a.loopWall, wallMinute(r.loc, lp.at))
 		}
 	}
 }
@@ -673,11 +639,19 @@ func (v *viewState) build(now int64) View {
 		rp := periodAt(r.loc, u)
 		rl := u + int64(rp.off)
 		rw := fmtMinute(int(floorMod(rl, 86400) / 60))
-		switch r.nextNote[i] {
-		case "first":
+		switch n := r.nextNote[i]; {
+		case n == "first":
 			f.Note = fmt.Sprintf("first of two %s runs in %s: clocks go back after it", rw, r.name)
-		case "second":
+		case n == "second":
 			f.Note = fmt.Sprintf("%s again in %s, after clocks go back", rw, r.name)
+		case n == "extra":
+			f.Note = fmt.Sprintf("an extra run: the expression doesn’t name %s, but robfig/cron fires then in %s (a library quirk)", rw, r.name)
+		case strings.HasPrefix(n, "loop:"):
+			where := ""
+			if v.zone != r.name {
+				where = " (" + r.name + " time)"
+			}
+			f.Note = fmt.Sprintf("robfig/cron would re-fire in a tight loop until %s%s. This is a library quirk; shown once here.", strings.TrimPrefix(n, "loop:"), where)
 		}
 		out.Next = append(out.Next, f)
 	}
@@ -763,35 +737,10 @@ func (v *viewState) seams(lo, hi int) []Seam {
 			}
 			s.Kind = kind
 			s.Red = kind != "quiet"
-			parts = append(parts, runChangeText(r.name, *m.run, a, same, v.zone))
+			parts = append(parts, runChangeText(r, *m.run, a, same))
 			if a != nil {
 				s.Label = anomalyLabel(a)
-				switch kind {
-				case "skip", "moved":
-					if same {
-						for i, w := range a.skipped {
-							if i < maxWallList {
-								addMark(day, w, "skip")
-							}
-						}
-					} else {
-						addMark(day, mnt, "skip")
-					}
-					for _, u := range a.extraAt {
-						ed, em := localOf(u + 1)
-						addMark(ed, em, "moved")
-					}
-				case "double":
-					for i, inst := range a.repInst {
-						if i >= maxWallList {
-							break
-						}
-						for _, u := range inst {
-							dd, dm := localOf(u + 1)
-							addMark(dd, dm, "double")
-						}
-					}
-				}
+				v.anomalyMarks(a, same, day, mnt, localOf, addMark)
 			}
 		}
 		if m.vw != nil {
@@ -844,19 +793,41 @@ func (v *viewState) seams(lo, hi int) []Seam {
 		seams = append(seams, s)
 	}
 
-	// Differences with no clock change behind them (not expected from the
-	// library, but reported if they ever occur).
+	// Differences on days no clock change touches. robfig/cron carries state
+	// from one Next call to the next, so a search that crossed a change can
+	// pass over a time days later; carriedText says which change.
+	var groups [][]*anomaly
 	for _, a := range r.anoms {
 		if a.c != nil {
 			continue
 		}
+		if n := len(groups); n > 0 && sameCarried(r, groups[n-1][len(groups[n-1])-1], a) {
+			groups[n-1] = append(groups[n-1], a)
+		} else {
+			groups = append(groups, []*anomaly{a})
+		}
+	}
+	for _, g := range groups {
+		a := g[0]
 		at := startOfDayNum(r.loc, a.day)
 		if !inWindow(at) {
 			continue
 		}
+		marks = nil
 		day, _ := localOf(at + 1)
-		seams = append(seams, Seam{Kind: a.kind(), Red: true, Day: day, At: at * 1000, Date: fmtDate(a.day), Zone: r.name, Label: anomalyLabel(a),
-			Text: fmt.Sprintf("On %s, robfig/cron’s firings in %s differ from a plain reading of the expression (%s).", fmtDate(a.day), r.name, anomalyDetail(a))})
+		for _, x := range g {
+			d, _ := localOf(startOfDayNum(r.loc, x.day) + 1)
+			v.anomalyMarks(x, same, d, 0, localOf, addMark)
+		}
+		if marks == nil {
+			marks = []Mark{}
+		}
+		label := anomalyLabel(a)
+		if len(g) > 1 {
+			label += fmt.Sprintf(", %d days", len(g))
+		}
+		seams = append(seams, Seam{Kind: a.kind(), Red: true, Day: day, At: at * 1000, Date: fmtDate(a.day), Zone: r.name, Label: label,
+			Text: carriedText(r, g, same), Marks: marks})
 	}
 	sort.SliceStable(seams, func(i, j int) bool { return seams[i].At < seams[j].At })
 	return seams
@@ -895,104 +866,4 @@ func signedShort(sec int) string {
 		return "+" + shortDuration(sec)
 	}
 	return "−" + shortDuration(sec)
-}
-
-// wallList names wall-clock minutes: a regular run reads as a range
-// ("each minute from 02:00 to 02:59"), anything else as a list.
-func wallList(mins []int) string {
-	if n := len(mins); n > 4 {
-		step := mins[1] - mins[0]
-		even := step > 0
-		for i := 2; i < n && even; i++ {
-			even = mins[i]-mins[i-1] == step
-		}
-		if even && step == 1 {
-			return fmt.Sprintf("each minute from %s to %s", fmtMinute(mins[0]), fmtMinute(mins[n-1]))
-		}
-		if even {
-			return fmt.Sprintf("every %d minutes from %s to %s", step, fmtMinute(mins[0]), fmtMinute(mins[n-1]))
-		}
-	}
-	var s []string
-	for i, m := range mins {
-		if i == maxWallList {
-			s = append(s, fmt.Sprintf("%d more", len(mins)-maxWallList))
-			break
-		}
-		s = append(s, fmtMinute(m))
-	}
-	return joinAnd(s)
-}
-
-func anomalyLabel(a *anomaly) string {
-	switch a.kind() {
-	case "moved":
-		return "moved"
-	case "skip":
-		if len(a.skipped) == 1 {
-			return fmtMinute(a.skipped[0]) + " skipped"
-		}
-		return fmt.Sprintf("%d skipped", len(a.skipped))
-	case "double":
-		if len(a.repeated) == 1 {
-			return fmtMinute(a.repeated[0]) + " twice"
-		}
-		return fmt.Sprintf("%d ran twice", len(a.repeated))
-	}
-	return ""
-}
-
-func anomalyDetail(a *anomaly) string {
-	var d []string
-	if len(a.skipped) > 0 {
-		d = append(d, "skips "+wallList(a.skipped))
-	}
-	if len(a.repeated) > 0 {
-		d = append(d, "fires twice at "+wallList(a.repeated))
-	}
-	if len(a.extra) > 0 {
-		d = append(d, "fires at "+wallList(a.extra)+", which the expression doesn’t name")
-	}
-	return strings.Join(d, "; ")
-}
-
-// runChangeText explains a clock change on the zone cron runs in.
-func runChangeText(runName string, c change, a *anomaly, same bool, viewZone string) string {
-	lo, hi := c.wallSpan()
-	span := fmt.Sprintf("%s–%s", fmtMinute(int(floorMod(lo, 86400)/60)), fmtMinute(int(floorMod(hi-60, 86400)/60)))
-	from, to := wallAt(c.at, c.before.off), wallAt(c.at, c.after.off)
-	why := "the zone’s standard offset changes"
-	switch {
-	case c.after.dst && !c.before.dst:
-		why = "daylight saving begins"
-	case !c.after.dst && c.before.dst:
-		why = "daylight saving ends"
-	}
-	who := "Clocks"
-	if !same {
-		who = fmt.Sprintf("In %s, where this schedule runs, clocks", runName)
-	}
-	head := fmt.Sprintf("%s %s %s at %s, to %s (%s becomes %s; %s).", who, goWord(c.delta()), fmtDuration(c.delta()), from, to, c.before.abbr, c.after.abbr, why)
-
-	forward := c.delta() > 0
-	if a == nil {
-		if forward {
-			return head + fmt.Sprintf(" No firing falls in the missing %s.", span)
-		}
-		return head + fmt.Sprintf(" No firing falls in the repeated %s.", span)
-	}
-	switch a.kind() {
-	case "skip":
-		if len(a.skipped) == 1 {
-			return head + fmt.Sprintf(" %s doesn’t happen, so robfig/cron skips the %s firing.", span, fmtMinute(a.skipped[0]))
-		}
-		return head + fmt.Sprintf(" %s doesn’t happen, so robfig/cron skips %d firings (%s).", span, len(a.skipped), wallList(a.skipped))
-	case "double":
-		gap := fmtDuration(c.delta())
-		if len(a.repeated) == 1 {
-			return head + fmt.Sprintf(" %s happens twice, and robfig/cron fires at %s both times, %s apart.", span, fmtMinute(a.repeated[0]), gap)
-		}
-		return head + fmt.Sprintf(" %s happens twice, and robfig/cron fires both times at %s.", span, wallList(a.repeated))
-	}
-	return head + " Here robfig/cron " + anomalyDetail(a) + "."
 }
