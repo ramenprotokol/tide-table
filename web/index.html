@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tide Table — a year of cron firings, read like an almanac</title>
+<meta name="description" content="Paste a cron expression and see the next twelve months of firings across time zones, with the daylight-saving seams where the schedule skips or runs twice.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="a/source-serif-4-roman.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="a/styles.css">
+<script type="module" src="a/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#almanac">Skip to the almanac</a>
+
+<header class="masthead">
+  <div class="masthead-bar">
+    <p class="kicker">An almanac for cron</p>
+    <button type="button" id="theme" class="lamp" aria-pressed="false">Night lamp</button>
+  </div>
+  <h1>Tide Table</h1>
+  <p class="standfirst">Twelve months of a cron schedule’s firings, read on any clock, with the seams where daylight saving makes it skip or run twice.</p>
+</header>
+
+<main>
+  <form id="query" class="query" autocomplete="off" novalidate>
+    <div class="q-expr">
+      <label class="label" for="expr">Cron expression</label>
+      <input id="expr" name="expr" type="text" inputmode="text" spellcheck="false" autocapitalize="off" autocorrect="off" maxlength="120" aria-describedby="expr-help expr-error">
+      <ol class="ruler" id="ruler" aria-hidden="true"></ol>
+      <p class="error" id="expr-error" aria-live="polite" hidden></p>
+      <p class="help" id="expr-help">Five fields: minute, hour, day of month, month, day of week. Shortcuts such as <code>@daily</code> work too.</p>
+    </div>
+
+    <section class="reading" aria-labelledby="reading-h">
+      <h2 class="label" id="reading-h">In plain English</h2>
+      <p class="sentence" id="sentence" aria-live="polite">&nbsp;</p>
+      <div class="reading-bar">
+        <button type="button" class="text-button" id="copy" disabled>Copy sentence</button>
+        <span class="copied" id="copied" role="status"></span>
+      </div>
+      <p class="summary" id="summary"></p>
+    </section>
+
+    <div class="q-settings">
+      <div class="q-preset">
+        <label class="label" for="preset">Start from an example</label>
+        <select id="preset"></select>
+        <p class="help" id="preset-note"></p>
+      </div>
+
+      <fieldset class="q-zones">
+        <legend class="label">Time zones <span class="aside">up to three</span></legend>
+        <div id="zones"></div>
+        <datalist id="tz-list"></datalist>
+        <button type="button" class="text-button" id="add-zone">Add a zone</button>
+      </fieldset>
+
+      <fieldset class="q-mode">
+        <legend class="label">Cron reads the clock of</legend>
+        <label class="choice"><input type="radio" name="mode" value="shared" checked> <span>the first zone <span class="aside">— the others read the same firings</span></span></label>
+        <label class="choice"><input type="radio" name="mode" value="each"> <span>each zone <span class="aside">— one copy of the job per zone</span></span></label>
+      </fieldset>
+
+      <div class="q-from">
+        <label class="label" for="from">Almanac from</label>
+        <input id="from" name="from" type="month" min="1970-01" max="2199-12" placeholder="YYYY-MM" aria-describedby="from-error">
+        <button type="button" class="text-button" id="from-now">This month</button>
+        <p class="error" id="from-error" aria-live="polite" hidden></p>
+      </div>
+    </div>
+  </form>
+
+  <div class="loading" id="loading" role="status">
+    <svg class="loading-dial" viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="d-rim" cx="60" cy="60" r="54"/>
+      <circle class="d-rim2" cx="60" cy="60" r="49"/>
+      <path class="d-grad" d="M60 11v6M109 60h-6M60 109v-6M11 60h6"/>
+      <g class="loading-hand"><path class="d-hand" d="M60 64V20"/></g>
+      <circle class="d-pivot" cx="60" cy="60" r="2"/>
+    </svg>
+    <div class="loading-text">
+      <p class="label">Loading the almanac engine</p>
+      <p id="loading-detail">Go compiled to WebAssembly, with the tz database inside.</p>
+      <div class="gauge" aria-hidden="true"><div class="gauge-fill" id="gauge-fill"></div></div>
+    </div>
+  </div>
+
+  <noscript><p class="error">Tide Table runs its engine in your browser, so it needs JavaScript and WebAssembly turned on.</p></noscript>
+
+  <section id="almanac" class="almanac" aria-label="Almanac" tabindex="-1"></section>
+
+  <section class="notes" aria-labelledby="notes-h">
+    <h2 class="label" id="notes-h">How the seams are read</h2>
+    <div class="notes-cols">
+      <div>
+        <h3>Whose rules</h3>
+        <p>Every firing here comes from <a href="https://github.com/robfig/cron">robfig/cron</a> v3, the Go cron library Kubernetes uses to parse CronJob schedules. The engine calls the library’s own parser and its <code>Next</code> function; this page only draws what they return. Other cron programs treat clock changes differently, so read this as robfig/cron’s behaviour, not cron’s.</p>
+      </div>
+      <div>
+        <h3>When clocks go forward</h3>
+        <p>The wall-clock times in the gap never happen. robfig/cron skips any firing that falls in them; its documentation says jobs scheduled in a leap-ahead transition “will not be run”. A red seam with a hollow ring marks each one.</p>
+      </div>
+      <div>
+        <h3>When clocks go back</h3>
+        <p>The repeated stretch happens twice, and robfig/cron fires in both, so a 01:30 job runs twice, an hour apart. A red seam with a double tick marks it. On a zone that only reads the schedule, a red seam also marks the day its readings shift.</p>
+      </div>
+      <div>
+        <h3>What is exact</h3>
+        <p>Counts, the dial, the lists and the seams are exact. On the year strip, ticks are grouped into 15-minute bins so a busy day still fits one line. Zone rules come from the tz database built into the engine, not from your browser.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <p id="engine-info">Engine: Go compiled to WebAssembly, running in a worker thread.</p>
+  <p>Set in Source Serif 4 (SIL Open Font License). Built by Ramen Protocol with AI assistance (Claude). MIT licence.</p>
+</footer>
+
+<div class="tip" id="tip" hidden></div>
+</body>
+</html>
