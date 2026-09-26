@@ -93,11 +93,11 @@ With the slim tz data that `time/tzdata` embeds, Go 1.26.4's `Time.ZoneBounds` r
 
   | Form | Size |
   | --- | --- |
-  | Uncompressed | 3,958,099 bytes |
-  | gzip -9 | 1,114,470 bytes |
-  | brotli 11 | 813,430 bytes |
+  | Uncompressed | 3,958,059 bytes |
+  | gzip -9 | 1,114,493 bytes |
+  | brotli 11 | 813,147 bytes |
 
-  Your host decides the compression. The colophon on the page reports what actually came over the network on your visit, read from the browser's resource timing.
+  The build is reproducible (`-trimpath -buildvcs=false`): a fresh clone with the same Go version produced the same bytes and the same hashed name. Your host decides the compression. The colophon on the page reports what actually came over the network on your visit, read from the browser's resource timing.
 - **Speed.** The page shows how long the engine took for the current request and how many firings it walked, measured on your device. There is no speed claim anywhere else.
 - **Loading.** The engine loads in a Web Worker behind a dial-and-gauge loading state with a byte count. The page stays responsive while it computes.
 - **Caching.** Every asset except `index.html` has a content hash in its name and is served `immutable` for a year. `index.html` has no max-age.

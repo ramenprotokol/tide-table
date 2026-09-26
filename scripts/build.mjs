@@ -27,7 +27,7 @@ mkdirSync(work, { recursive: true });
 const goVersion = go(['env', 'GOVERSION']);
 const goroot = go(['env', 'GOROOT']);
 const wasmOut = join(work, 'tide.wasm');
-go(['build', '-trimpath', '-ldflags=-s -w', '-o', wasmOut, './cmd/tidewasm'], { GOOS: 'js', GOARCH: 'wasm', CGO_ENABLED: '0' });
+go(['build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w', '-o', wasmOut, './cmd/tidewasm'], { GOOS: 'js', GOARCH: 'wasm', CGO_ENABLED: '0' });
 const wasmExec = [join(goroot, 'lib', 'wasm', 'wasm_exec.js'), join(goroot, 'misc', 'wasm', 'wasm_exec.js')].find(existsSync);
 if (!wasmExec) throw new Error('wasm_exec.js not found in GOROOT');
 
