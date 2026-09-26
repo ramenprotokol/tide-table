@@ -21,6 +21,7 @@ const els = {
   copy: $('copy'),
   copied: $('copied'),
   summary: $('summary'),
+  busy: $('busy'),
   loading: $('loading'),
   loadingDetail: $('loading-detail'),
   gauge: $('gauge-fill'),
@@ -44,6 +45,12 @@ let layouts = [];
 let ready = false;
 let timer = 0;
 let lastWidth = 0;
+let inflight = 0;
+
+// The strip shares its row with the 200 px dial (plus a 28 px gap) above 980
+// px; styles.css lays out .plate-body the same way.
+const DIAL_COLUMN = 200 + 28;
+const wide = window.matchMedia('(min-width: 981px)');
 
 // ---------- state <-> URL ----------
 
@@ -223,15 +230,28 @@ function schedule(delay = 160) {
   timer = setTimeout(run, delay);
 }
 
+// A busy line appears when a compute takes more than a moment (an
+// every-minute schedule in three zones walks about 1.6 million firings).
+function setBusy(on) {
+  els.busy.hidden = !on;
+  if (on) els.almanac.setAttribute('aria-busy', 'true');
+  else els.almanac.removeAttribute('aria-busy');
+}
+
 async function run() {
   if (!ready) return;
   const req = { expr: state.expr, zones: state.zones.map((z) => z.trim()), mode: state.mode, from: state.from, now: Date.now() };
   let out;
+  inflight++;
+  const busyTimer = setTimeout(() => setBusy(true), 250);
   try {
     out = await engine.compute(req);
   } catch (err) {
     els.summary.textContent = `The engine stopped: ${err.message}. Reload the page to start it again.`;
     return;
+  } finally {
+    clearTimeout(busyTimer);
+    if (--inflight === 0) setBusy(false);
   }
   if (out.stale) return;
   clearErrors();
@@ -268,6 +288,7 @@ function renderReading(res, ms) {
   } else {
     parts.push(`${num(v.total)} ${v.total === 1 ? 'firing' : 'firings'} from ${MONTHS[m0.month - 1]} ${m0.year} through ${MONTHS[m11.month - 1]} ${m11.year} on ${esc(v.zone)}’s calendar`);
   }
+  if (res.truncated) parts.push('<strong>incomplete: the walk stopped at its backstop</strong>');
   const redText = reds === 0 ? 'no red seams' : `${reds} red ${reds === 1 ? 'seam' : 'seams'}`;
   parts.push(`<span class="${reds ? 'red-note' : ''}">${redText}</span>`);
   parts.push(`${num(res.walked)} firings walked through the library’s <code>Next</code>, in ${ms < 1 ? 'under 1' : num(Math.round(ms))} ms on this device (measured)`);
@@ -295,8 +316,16 @@ async function copySentence() {
     }
     ta.remove();
   }
-  els.copied.textContent = ok ? 'Copied.' : 'Couldn’t reach the clipboard; select the sentence to copy it.';
-  setTimeout(() => (els.copied.textContent = ''), 2600);
+  if (ok) {
+    els.copied.textContent = 'Copied.';
+    setTimeout(() => (els.copied.textContent = ''), 2600);
+  } else {
+    // Leave the sentence selected so a keyboard copy works.
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.selectAllChildren(els.sentence);
+    els.copied.textContent = 'Couldn’t reach the clipboard. The sentence is selected: press Ctrl+C (⌘C on a Mac) to copy it.';
+  }
 }
 
 // ---------- plates ----------
@@ -326,13 +355,14 @@ function stripDesc(v) {
 function legend() {
   const sw = (inner) => `<svg viewBox="0 0 22 10" aria-hidden="true">${inner}</svg>`;
   return `<ul class="strip-key">
-    <li>${sw('<rect class="s-tick" x="9" y="1" width="2" height="8"/>')}a firing (15-min bins)</li>
+    <li>${sw('<rect class="s-tick" x="9.8" y="0.5" width="2.4" height="9"/>')}a firing (15-min bins)</li>
     <li><span class="key-count">31×</span>firings that month</li>
-    <li>${sw('<rect class="s-tick s-past" x="9" y="1" width="2" height="8"/>')}already past</li>
+    <li>${sw('<rect class="s-tick s-past" x="9.8" y="0.5" width="2.4" height="9"/>')}already past</li>
     <li>${sw('<g class="seam red"><line class="seam-line" x1="0" y1="5" x2="22" y2="5"/></g>')}clock change that hits the job</li>
     <li>${sw('<g class="seam quiet"><line class="seam-line" x1="0" y1="5" x2="22" y2="5"/></g>')}clock change, no effect</li>
     <li>${sw('<circle class="mark-skip" cx="11" cy="5" r="2.6"/>')}skipped</li>
     <li>${sw('<path class="mark-double" d="M9.6 0v10M12.4 0v10"/>')}fired twice</li>
+    <li>${sw('<circle class="mark-extra" cx="11" cy="5" r="2.2"/>')}extra run</li>
   </ul>`;
 }
 
@@ -356,7 +386,7 @@ function nextHTML(v) {
 }
 
 function stripWidth() {
-  return Math.max(280, Math.floor(els.almanac.clientWidth));
+  return Math.max(280, Math.floor(els.almanac.clientWidth - (wide.matches ? DIAL_COLUMN : 0)));
 }
 
 function renderPlates(res) {
@@ -375,16 +405,20 @@ function renderPlates(res) {
         <p class="zone-now">${esc(v.abbr)} · ${esc(v.offset)}</p>
         <p class="plate-meta">${roleLine(res, v, i)}. <em>${num(v.total)}</em> ${v.total === 1 ? 'firing' : 'firings'}${reds ? `, ${reds} red ${reds === 1 ? 'seam' : 'seams'}` : ''}.${empty}</p>
       </header>
-      <div class="strip-wrap">${strip.svg}</div>
-      ${legend()}
-      <div class="plate-foot">
+      <div class="plate-body">
+        <div class="strip-col"><div class="strip-wrap">${strip.svg}</div>${legend()}</div>
         <figure class="dial-fig">${renderDial(v, { title: dialSummary(v), id: `dial-${i}` })}<figcaption>Firings by time of day on this clock. The dashed hand is now.</figcaption></figure>
+      </div>
+      <div class="plate-foot">
         <section class="seams" aria-labelledby="seams-${i}-h"><h3 id="seams-${i}-h">Seams</h3>${seamsHTML(v)}</section>
         <section class="next" aria-labelledby="next-${i}-h"><h3 id="next-${i}-h">Next ten firings</h3>${nextHTML(v)}</section>
       </div>
     </article>`;
   });
-  els.almanac.innerHTML = html.join('');
+  const notice = res.truncated
+    ? '<p class="notice">This almanac is incomplete: a walk stopped at its backstop (532,800 firings, or a re-fire loop longer than a day), so the counts below stop early.</p>'
+    : '';
+  els.almanac.innerHTML = notice + html.join('');
 }
 
 function redrawStrips() {
@@ -480,12 +514,12 @@ const engine = new Engine({
   onProgress(loaded, total) {
     const pct = Math.min(100, (loaded / total) * 100);
     els.gauge.style.width = `${pct.toFixed(1)}%`;
-    els.loadingDetail.textContent = `${num(Math.round(loaded / 1024))} of ${num(Math.round(total / 1024))} KB of WebAssembly received.`;
+    els.loadingDetail.textContent = `${num(Math.round(loaded / 1024))} of ${num(Math.round(total / 1024))} KiB of WebAssembly received.`;
   },
 });
 
 function describeLoad(m) {
-  const kb = (n) => `${num(Math.round(n / 1024))} KB`;
+  const kb = (n) => `${num(Math.round(n / 1024))} KiB`;
   const t = m.transfer;
   let wire = 'transfer size not reported by this browser';
   if (t && t.transferSize > 0) wire = `${kb(t.encodedBodySize || t.transferSize)} came over the network this visit`;

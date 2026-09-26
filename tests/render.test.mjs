@@ -1,7 +1,7 @@
 // Unit tests for the drawing helpers (pure functions, no DOM).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { binRuns, stripLayout, dayPos, dayAt, renderStrip, renderDial, dialSummary, esc } from '../web/render.js';
+import { binRuns, stripLayout, dayPos, dayAt, renderStrip, renderDial, dialSummary, esc, stripLabel } from '../web/render.js';
 
 // Encode bins the way the Go engine does: digit k holds bins 4k..4k+3.
 function encode(bins) {
@@ -76,6 +76,11 @@ test('renderStrip draws ticks, today, and a red seam with its mark', () => {
   assert.match(svg, /class="s-today"/);
   assert.match(svg, /<g class="seam red" data-seam="0">/);
   assert.match(svg, /class="mark-skip"/);
+  // The red seam's short label is printed on the strip.
+  assert.match(svg, /<text class="seam-label"[^>]*>02:30 skipped<\/text>/);
+  // Firing bars are at least 2.4 px wide.
+  const bar = /class="s-tick"[^>]*d="M[\d.]+ [\d.]+h([\d.]+)/.exec(svg);
+  assert.ok(bar && Number(bar[1]) >= 2.4, `firing bar width ${bar?.[1]}`);
   assert.equal(layout.cols, 12);
   assert.ok(!/style=/.test(svg), 'no inline style attributes (the CSP forbids them)');
 });
@@ -87,6 +92,11 @@ test('renderDial draws a tick per firing minute and the red mark', () => {
   assert.match(svg, /class="d-hand"/);
   assert.ok(!/style=/.test(svg));
   assert.match(dialSummary(view), /firings at 02:30 \(364\)/);
+});
+
+test('strip labels drop the detail after a comma', () => {
+  assert.equal(stripLabel('12:00 skipped, 30 days'), '12:00 skipped');
+  assert.equal(stripLabel('02:50 re-fires'), '02:50 re-fires');
 });
 
 test('esc escapes markup', () => {

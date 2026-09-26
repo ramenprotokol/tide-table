@@ -477,6 +477,47 @@ select:hover {
 .stale .plate {
   opacity: 0.45;
 }
+/* Shown while a compute takes more than a moment. */
+.busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-style: italic;
+}
+.busy[hidden] {
+  display: none;
+}
+.busy svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.busy .d-rim {
+  stroke-width: 9;
+}
+.busy .d-hand-solid {
+  stroke: var(--ink);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+.busy-hand {
+  transform-origin: 60px 60px;
+  animation: sweep 1.6s linear infinite;
+}
+.almanac[aria-busy='true'] .plate {
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+/* An incomplete almanac says so above the plates. */
+.notice {
+  margin: 22px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--ink);
+  border-left: 4px double var(--ink);
+  font-weight: 600;
+}
 
 /* Loading state */
 .loading {
@@ -666,7 +707,7 @@ select:hover {
 }
 .seam.quiet .seam-line {
   stroke: var(--ink-3);
-  stroke-dasharray: 2 2;
+  stroke-dasharray: 1 2.5;
   stroke-width: 0.8;
 }
 .seam.quiet .seam-notch {
@@ -685,8 +726,17 @@ select:hover {
   stroke: var(--red);
   stroke-width: 1.1;
 }
-.mark-moved {
+.mark-extra {
   fill: var(--red);
+}
+.seam-label {
+  font-size: 7.5px;
+  font-weight: 650;
+  fill: var(--red);
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke;
 }
 .seam.hot .seam-line {
   stroke-width: 2.4;
@@ -695,20 +745,30 @@ select:hover {
   stroke: var(--ink);
 }
 
+/* The strip with the dial beside it; below 981 px the dial drops under the
+   strip. app.js subtracts the same 200 px + 28 px when it sizes the strip. */
+.plate-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: 28px;
+  align-items: start;
+}
 .plate-foot {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr) minmax(250px, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 320px);
   gap: 34px;
-  margin-top: 22px;
+  margin-top: 26px;
   align-items: start;
 }
 .dial-fig {
   margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--ink);
 }
 .dial {
   display: block;
   width: 100%;
-  max-width: 250px;
+  max-width: 200px;
   height: auto;
   font-family: 'Source Serif 4', Georgia, serif;
 }
@@ -780,7 +840,7 @@ select:hover {
   stroke: var(--red);
   stroke-width: 1.2;
 }
-.d-moved {
+.d-extra {
   fill: var(--red);
 }
 .d-hand {
@@ -891,7 +951,7 @@ select:hover {
 }
 .notes-cols {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 26px;
   margin-top: 12px;
 }
@@ -941,11 +1001,23 @@ select:hover {
 
 /* Tablet */
 @media (max-width: 980px) {
-  .plate-foot {
-    grid-template-columns: 220px minmax(0, 1fr);
+  .plate-body {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .plate-foot .next {
-    grid-column: 1 / -1;
+  .dial-fig {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    border-top: 0;
+    padding-top: 0;
+  }
+  .dial-fig .dial {
+    flex: none;
+    width: 200px;
+  }
+  .dial-fig figcaption {
+    text-align: left;
+    max-width: 18em;
   }
   .notes-cols {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -989,9 +1061,17 @@ select:hover {
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
   }
-  .dial {
+  .dial-fig {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .dial-fig .dial {
     margin: 0 auto;
+    width: 100%;
     max-width: 240px;
+  }
+  .dial-fig figcaption {
+    text-align: center;
   }
   .notes-cols {
     grid-template-columns: minmax(0, 1fr);
@@ -1003,8 +1083,12 @@ select:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .loading-hand {
+  .loading-hand,
+  .busy-hand {
     animation: none;
+  }
+  .almanac[aria-busy='true'] .plate {
+    transition: none;
   }
   * {
     scroll-behavior: auto !important;

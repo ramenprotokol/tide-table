@@ -59,6 +59,23 @@ test('the almanac works in a real browser', { skip: plan.skip, timeout: 180000 }
         assert.match(r.engine, /tz database 20\d\d[a-z]/);
         assert.ok(r.next >= 30, `next-firing rows: ${r.next}`);
         assert.ok(r.scroll, 'no horizontal scroll');
+        // Red seams carry their short label on the strip.
+        const labels = await page.evaluate(`[...document.querySelectorAll('#strip-0 .seam-label')].map((t) => t.textContent)`);
+        assert.deepEqual(labels, ['02:30 skipped', '02:30 twice']);
+        // The dial sits beside the first strip, level with it, so a plate's
+        // strip, dial and legend fit one 800 px screen; the strip keeps its
+        // twelve columns.
+        const pos = await page.evaluate(`(() => {
+          const p = document.querySelector('.plate').getBoundingClientRect();
+          const s = document.querySelector('.plate .strip-wrap').getBoundingClientRect();
+          const d = document.querySelector('.plate .dial').getBoundingClientRect();
+          const k = document.querySelector('.plate .strip-key').getBoundingClientRect();
+          return { stripRight: s.right, dialLeft: d.left, dialTop: d.top, stripTop: s.top, screen: Math.max(d.bottom, k.bottom) - p.top, rowY: new Set([...document.querySelectorAll('#strip-0 .s-month')].map((t) => t.getAttribute('y'))).size };
+        })()`);
+        assert.ok(pos.dialLeft >= pos.stripRight, `dial (left ${pos.dialLeft}) beside the strip (right ${pos.stripRight})`);
+        assert.ok(Math.abs(pos.dialTop - pos.stripTop) < 40, 'dial level with the strip');
+        assert.ok(pos.screen <= 800, `plate head to legend is ${pos.screen}px, more than one screen`);
+        assert.equal(pos.rowY, 1, 'twelve months in one band');
       }));
 
     await t.test('bad input gets a clear message and keeps the last almanac', () =>
@@ -96,8 +113,54 @@ test('the almanac works in a real browser', { skip: plan.skip, timeout: 180000 }
         assert.equal(r.from, '2028-01');
         assert.match(r.hash, /f=2028-01/);
         assert.match(await page.evaluate(`document.querySelector('.plate-meta').textContent`), /1 firing/);
+      }));
+
+    await t.test('copy puts the sentence on the clipboard', async () => {
+      await chrome.grant(base, ['clipboardReadWrite', 'clipboardSanitizedWrite']);
+      await withPage(chrome, base, { width: 1280, height: 800 }, '#e=0%209%20*%20*%201-5&z=Europe/London&m=shared', async (page) => {
         await page.evaluate(`document.getElementById('copy').click()`);
         await page.waitFor(`document.getElementById('copied').textContent.length > 0`);
+        assert.equal(await page.evaluate(`document.getElementById('copied').textContent`), 'Copied.');
+        assert.equal(await page.evaluate(`navigator.clipboard.readText()`), 'At 09:00, Monday through Friday (Europe/London time)');
+      });
+    });
+
+    await t.test('without the clipboard, the sentence is left selected', () =>
+      withPage(chrome, base, { width: 1280, height: 800 }, '#e=0%209%20*%20*%201-5&z=Europe/London&m=shared', async (page) => {
+        // Take the clipboard away, as a locked-down browser would.
+        await page.evaluate(`(() => {
+          Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) } });
+          document.execCommand = () => false;
+          document.getElementById('copy').click();
+        })()`);
+        await page.waitFor(`document.getElementById('copied').textContent.length > 0`);
+        const r = await page.evaluate(`({ msg: document.getElementById('copied').textContent, sel: String(getSelection()) })`);
+        assert.match(r.msg, /The sentence is selected/);
+        assert.equal(r.sel.trim(), 'At 09:00, Monday through Friday — Europe/London time'.replace(' — ', '\u2002— '));
+      }));
+
+    await t.test('a long compute shows the busy line, then the almanac', () =>
+      withPage(chrome, base, { width: 1280, height: 800 }, '', async (page) => {
+        await page.evaluate(`(() => {
+          document.querySelector('input[name=mode][value=each]').click();
+          const el = document.getElementById('expr');
+          el.value = '* * * * *';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        })()`);
+        await page.waitFor(`!document.getElementById('busy').hidden && document.getElementById('almanac').getAttribute('aria-busy') === 'true'`, 20000);
+        await page.waitFor(`document.getElementById('busy').hidden && document.getElementById('sentence').textContent.startsWith('Every minute')`, 60000);
+        assert.equal(await page.evaluate(`document.getElementById('almanac').hasAttribute('aria-busy')`), false);
+        assert.match(await page.evaluate(`document.getElementById('summary').textContent`), /525,600 firings/);
+      }));
+
+    await t.test('Lord Howe: the half-hour quirk is explained, not called a missing time', () =>
+      withPage(chrome, base, { width: 1280, height: 800 }, '#e=0%2012%20*%20*%20*&z=Australia/Lord_Howe&m=shared&f=2026-09', async (page) => {
+        const r = await page.evaluate(`[...document.querySelectorAll('.plate .seam-item.red p')].map((p) => p.textContent)`);
+        assert.equal(r.length, 2);
+        for (const text of r) {
+          assert.match(text, /12:00 does happen that day, but robfig\/cron skips it/);
+          assert.doesNotMatch(text, /doesn’t happen|happens twice/);
+        }
       }));
 
     await t.test('state in the URL is restored', () =>

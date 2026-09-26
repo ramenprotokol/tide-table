@@ -19,6 +19,22 @@ test('index.html references only files that exist', () => {
   assert.match(html, /a\/styles\.[0-9a-f]{10}\.css/);
 });
 
+test('third-party notices ship in dist/ and the page links them', () => {
+  const notices = readFileSync(join(dist, 'THIRD_PARTY_NOTICES.txt'), 'utf8');
+  // robfig/cron's MIT notice, which must accompany copies of it.
+  assert.match(notices, /github\.com\/robfig\/cron\/v3 v3\.0\.1/);
+  assert.match(notices, /Copyright \(C\) 2012 Rob Figueiredo/);
+  assert.match(notices, /The above copyright notice and this permission notice shall be included/);
+  // Go's BSD licence, for the runtime and standard library in the engine.
+  assert.match(notices, /Copyright 2009 The Go Authors/);
+  assert.match(notices, /Redistribution and use in source and binary forms/);
+  // The typeface's OFL, which also stays at its own path.
+  assert.match(notices, /SIL OPEN FONT LICENSE/i);
+  assert.ok(existsSync(join(dist, 'fonts-OFL.txt')));
+  const html = readFileSync(join(dist, 'index.html'), 'utf8');
+  assert.match(html, /<a href="THIRD_PARTY_NOTICES\.txt">/);
+});
+
 test('every hashed asset is named after its own content', () => {
   const files = readdirSync(join(dist, 'a'));
   assert.ok(files.length >= 10);
@@ -131,4 +147,20 @@ test('the heaviest request stays within the caps', async () => {
     assert.equal(v.dial.length, 1440);
   }
   assert.ok(r.walked <= 3 * 368 * 1440, `walked ${r.walked}`);
+  assert.equal(r.truncated, false);
+});
+
+test('Chatham’s re-fire loop is drawn once, with its quirk explained', async () => {
+  const T = await bootEngine();
+  const t0 = performance.now();
+  const r = compute(T, '50 3 * * *', ['Pacific/Chatham'], 'shared', '2026-09');
+  assert.ok(performance.now() - t0 < 3000, 'computes promptly');
+  const v = r.views[0];
+  assert.equal(r.truncated, false);
+  assert.equal(v.total, 365);
+  const loops = v.seams.filter((s) => s.kind === 'loop');
+  assert.equal(loops.length, 1);
+  assert.equal(loops[0].label, '02:50 re-fires');
+  assert.match(loops[0].text, /would re-fire in a tight loop until 03:00\. This is a library quirk; shown once here\./);
+  assert.ok(!v.seams.some((s) => /No clock change explains it/.test(s.text)));
 });

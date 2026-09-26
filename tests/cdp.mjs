@@ -113,6 +113,9 @@ export async function launchChrome(chromePath) {
     // Worker targets (the engine) report their console through auto-attach.
     await s('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     await s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile });
+    // A headless page never has focus, and the async clipboard API refuses
+    // unfocused documents; emulate focus so it behaves as in a real window.
+    await s('Emulation.setFocusEmulationEnabled', { enabled: true });
     const features = [];
     if (scheme) features.push({ name: 'prefers-color-scheme', value: scheme });
     if (reducedMotion) features.push({ name: 'prefers-reduced-motion', value: reducedMotion });
@@ -170,5 +173,8 @@ export async function launchChrome(chromePath) {
     rmSync(profile, { recursive: true, force: true });
   }
 
-  return { openPage, close };
+  // Grants browser permissions (such as the clipboard) to an origin.
+  const grant = (origin, permissions) => send('Browser.grantPermissions', { origin, permissions });
+
+  return { openPage, close, grant };
 }

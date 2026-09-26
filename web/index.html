@@ -41,6 +41,10 @@
         <span class="copied" id="copied" role="status"></span>
       </div>
       <p class="summary" id="summary"></p>
+      <p class="busy" id="busy" role="status" hidden>
+        <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="d-rim" cx="60" cy="60" r="52"/><g class="busy-hand"><path class="d-hand-solid" d="M60 64V16"/></g><circle class="d-pivot" cx="60" cy="60" r="6"/></svg>
+        <span>Working: asking robfig/cron for each firing in turn…</span>
+      </p>
     </section>
 
     <div class="q-settings">
@@ -96,7 +100,7 @@
     <div class="notes-cols">
       <div>
         <h3>Whose rules</h3>
-        <p>Every firing here comes from <a href="https://github.com/robfig/cron">robfig/cron</a> v3, the Go cron library Kubernetes uses to parse CronJob schedules. The engine calls the library’s own parser and its <code>Next</code> function; this page only draws what they return. Other cron programs treat clock changes differently, so read this as robfig/cron’s behaviour, not cron’s.</p>
+        <p>Every firing here comes from <a href="https://github.com/robfig/cron">robfig/cron</a> v3, the Go cron library Kubernetes uses to parse CronJob schedules. The engine calls the library’s own parser, then its <code>Next</code> function, each time from the previous firing, as a running scheduler does. Other cron programs treat clock changes differently, so read this as robfig/cron’s behaviour, not cron’s.</p>
       </div>
       <div>
         <h3>When clocks go forward</h3>
@@ -107,8 +111,12 @@
         <p>The repeated stretch happens twice, and robfig/cron fires in both, so a 01:30 job runs twice, an hour apart. A red seam with a double tick marks it. On a zone that only reads the schedule, a red seam also marks the day its readings shift.</p>
       </div>
       <div>
+        <h3>The library’s quirks</h3>
+        <p>robfig/cron searches for the next run an hour at a time. After a change that isn’t a whole hour (Lord Howe Island moves 30 minutes) or isn’t on the hour (the Chatham Islands change at 02:45), its steps land off the hour. On those days it can pass over a time that does happen, or add an extra run, marked with a red dot, at a time the expression doesn’t name. In the Chatham Islands its <code>Next</code> can even return the same run again, so a scheduler would re-fire in a tight loop for a few minutes; the page draws that run once and says so. Each seam says which of these happened.</p>
+      </div>
+      <div>
         <h3>What is exact</h3>
-        <p>Counts, the dial, the lists and the seams are exact. On the year strip, ticks are grouped into 15-minute bins so a busy day still fits one line. Zone rules come from the tz database built into the engine, not from your browser.</p>
+        <p>Counts, the dial, the lists and the seams are exact for the walk shown, which starts at the first instant of the almanac’s first day. To stay quick, the engine gives <code>Next</code> a fixed-offset zone wherever the zone’s offset can’t change during the call; a test compares that with the real zone in every zone of the tz database. On the year strip, ticks are grouped into 15-minute bins so a busy day still fits one line. Zone rules come from the tz database built into the engine, not from your browser.</p>
       </div>
     </div>
   </section>
@@ -116,7 +124,7 @@
 
 <footer class="colophon">
   <p id="engine-info">Engine: Go compiled to WebAssembly, running in a worker thread.</p>
-  <p>Set in Source Serif 4 (SIL Open Font License). Built by Ramen Protocol with AI assistance (Claude). MIT licence.</p>
+  <p>Set in Source Serif 4 (SIL Open Font License). Built by Ramen Protocol with AI assistance (Claude). MIT licence. Licences for robfig/cron, Go and the typeface: <a href="THIRD_PARTY_NOTICES.txt">third-party notices</a>.</p>
 </footer>
 
 <div class="tip" id="tip" hidden></div>

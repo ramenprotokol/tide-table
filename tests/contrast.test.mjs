@@ -65,7 +65,7 @@ for (const [name, t] of [
 }
 
 test('red is used only for daylight-saving marks', () => {
-  const allowed = /seam|mark-|d-skip|d-double|d-moved|red-note|\.red|tr\.note/;
+  const allowed = /seam|mark-|d-skip|d-double|d-extra|red-note|\.red|tr\.note/;
   for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
     const [, sel, body] = m;
     if (!/var\(--red\)/.test(body)) continue;

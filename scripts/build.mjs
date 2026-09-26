@@ -69,7 +69,30 @@ writeFileSync(join(dist, 'index.html'), rewrite(readFileSync(join(web, 'index.ht
 for (const f of ['_headers', 'favicon.svg']) cpSync(join(web, f), join(dist, f));
 cpSync(join(web, 'fonts', 'OFL.txt'), join(dist, 'fonts-OFL.txt'));
 
-// 4. Report sizes, measured.
+// 4. Third-party notices. The engine embeds robfig/cron (MIT: its notice must
+// ship with it) and Go's runtime and standard library (BSD); Go's
+// wasm_exec.js is served as is. Both licences are copied from the sources
+// the build used, so they can't drift from what was compiled.
+const cronDir = go(['list', '-m', '-f', '{{.Dir}}', 'github.com/robfig/cron/v3']);
+const cronVersion = go(['list', '-m', '-f', '{{.Version}}', 'github.com/robfig/cron/v3']);
+// Official Go releases keep LICENSE in GOROOT; some packagers (Homebrew) move
+// it one level up.
+const goLicense = [join(goroot, 'LICENSE'), join(goroot, '..', 'LICENSE')].find(existsSync);
+if (!goLicense) throw new Error('Go LICENSE not found in or beside GOROOT');
+const goPatents = [join(goroot, 'PATENTS'), join(goroot, '..', 'PATENTS')].find(existsSync);
+const rule = '='.repeat(78);
+const section = (title, body) => `${rule}\n${title}\n${rule}\n\n${body.trim()}\n\n`;
+writeFileSync(
+  join(dist, 'THIRD_PARTY_NOTICES.txt'),
+  `Tide Table: third-party notices\n\nTide Table's own code is MIT-licensed (see LICENSE in the source repository).\nThe files served with it include the following third-party software.\n\n` +
+    section(`github.com/robfig/cron/v3 ${cronVersion}\nCompiled into a/tide.<hash>.wasm. MIT licence:`, readFileSync(join(cronDir, 'LICENSE'), 'utf8')) +
+    section(`The Go programming language, ${goVersion}\nIts runtime and standard library are compiled into a/tide.<hash>.wasm, and\na/wasm_exec.<hash>.js is Go's WebAssembly loader. BSD licence:`, readFileSync(goLicense, 'utf8')) +
+    (goPatents ? section('Go: additional IP rights grant (PATENTS)', readFileSync(goPatents, 'utf8')) : '') +
+    section('IANA time zone database (embedded through Go\'s time/tzdata)', 'The tz database is in the public domain.') +
+    section('Source Serif 4 (a/source-serif-4-*.woff2), also at fonts-OFL.txt', readFileSync(join(web, 'fonts', 'OFL.txt'), 'utf8')),
+);
+
+// 5. Report sizes, measured.
 const gz = gzipSync(wasm.buf, { level: 9 }).length;
 const br = brotliCompressSync(wasm.buf, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).length;
 const kib = (n) => `${(n / 1024).toFixed(0)} KiB`;

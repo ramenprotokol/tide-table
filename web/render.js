@@ -9,6 +9,7 @@ export function esc(s) {
 }
 
 const f1 = (n) => Math.round(n * 10) / 10;
+const TICK_W = 2.4; // narrowest firing bar, in px
 
 // Decode one day's bins (24 hex digits; digit k holds bins 4k..4k+3, bit j =
 // bin 4k+j) into runs of [firstBin, length].
@@ -26,6 +27,13 @@ export function binRuns(hex) {
   }
   if (start >= 0) runs.push([start, BINS - start]);
   return runs;
+}
+
+// The label printed on the strip: the part before any comma ("12:00
+// skipped, 30 days" prints as "12:00 skipped"); the full label is in the
+// seam's tooltip and the seams list.
+export function stripLabel(label) {
+  return String(label).split(',')[0];
 }
 
 // How the twelve month columns wrap at a given width.
@@ -127,10 +135,13 @@ export function renderStrip(view, width, { title, desc, id }) {
       const runs = binRuns(view.bins[day]);
       if (!runs.length) continue;
       const bucket = view.today >= 0 && day < view.today ? past : future;
+      // A firing is a bar the full height of its row, at least TICK_W wide,
+      // so a daily job reads as a solid rule and a missed day as a clear
+      // break: heavier than any line on the page, unlike the dotted seam.
       for (const [b, n] of runs) {
-        const w = Math.max(1.6, n * bw);
-        const x = x0 + b * bw + (n * bw < 1.6 ? (n * bw - 1.6) / 2 : 0);
-        bucket.push(`M${f1(x)} ${f1(y + 0.75)}h${f1(w)}v${f1(L.rowH - 1.5)}h${f1(-w)}z`);
+        const w = Math.max(TICK_W, n * bw);
+        const x = x0 + b * bw + (n * bw < TICK_W ? (n * bw - TICK_W) / 2 : 0);
+        bucket.push(`M${f1(x)} ${f1(y)}h${f1(w)}v${L.rowH}h${f1(-w)}z`);
       }
     }
     if (view.today >= mo.first && view.today < mo.first + mo.days) {
@@ -141,6 +152,7 @@ export function renderStrip(view, width, { title, desc, id }) {
   if (past.length) out.push(`<path class="s-tick s-past" d="${past.join('')}"/>`);
   if (future.length) out.push(`<path class="s-tick" d="${future.join('')}"/>`);
 
+  const labelled = new Map(); // month -> y of the last label printed there
   view.seams.forEach((s, i) => {
     const p = dayPos(view, L, s.day);
     if (!p) return;
@@ -153,6 +165,13 @@ export function renderStrip(view, width, { title, desc, id }) {
     if (s.red) {
       const rx = f1(p.x + L.colW - 1.5);
       g.push(`<path class="seam-flag" d="M${rx} ${f1(p.y - 3)}l-4.5 3l4.5 3z"/>`);
+      // Its short label, printed beside the seam: above it, or below it on a
+      // month's first rows, and nudged down clear of an earlier label.
+      let ly = p.row >= 2 ? p.y - 2.5 : p.y + L.rowH + 7.5;
+      const prev = labelled.get(p.m);
+      if (prev !== undefined && Math.abs(ly - prev) < 9) ly = prev + 9;
+      labelled.set(p.m, ly);
+      g.push(`<text class="seam-label" x="${f1(x0 + L.trackW)}" y="${f1(ly)}" text-anchor="end">${esc(stripLabel(s.label))}</text>`);
     }
     for (const mk of s.marks ?? []) {
       const q = dayPos(view, L, mk.day);
@@ -161,7 +180,7 @@ export function renderStrip(view, width, { title, desc, id }) {
       const cy = q.y + L.rowH / 2;
       if (mk.kind === 'skip') g.push(`<circle class="mark-skip" cx="${f1(x)}" cy="${f1(cy)}" r="2.3"/>`);
       else if (mk.kind === 'double') g.push(`<path class="mark-double" d="M${f1(x - 1.2)} ${f1(q.y - 1)}v${f1(L.rowH + 2)}M${f1(x + 1.2)} ${f1(q.y - 1)}v${f1(L.rowH + 2)}"/>`);
-      else g.push(`<circle class="mark-moved" cx="${f1(x)}" cy="${f1(cy)}" r="2"/>`);
+      else g.push(`<circle class="mark-extra" cx="${f1(x)}" cy="${f1(cy)}" r="2"/>`);
     }
     g.push('</g>');
     out.push(g.join(''));
@@ -237,7 +256,7 @@ export function renderDial(view, { title, id, size = 240 }) {
         o.push(`<path class="d-double" d="${seg(-off)}${seg(off)}"><title>${esc(`${s.label}, ${s.date}`)}</title></path>`);
       } else {
         const [x, y] = pt(mk.minute, r1 + 5.5);
-        o.push(`<circle class="d-moved" cx="${f1(x)}" cy="${f1(y)}" r="2.2"/>`);
+        o.push(`<circle class="d-extra" cx="${f1(x)}" cy="${f1(y)}" r="2.2"><title>${esc(`${s.label}, ${s.date}`)}</title></circle>`);
       }
     }
   }
