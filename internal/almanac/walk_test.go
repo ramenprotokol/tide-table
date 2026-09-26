@@ -130,12 +130,14 @@ type sweepStats struct {
 }
 
 // sweep compares the two walks for every zone and window it is given, in
-// parallel, and returns the mismatches (at most 30 described).
-func sweep(t *testing.T, zones []string, windows func(zone string) [][2]int, exprs func(zone string, i int) []string) (*sweepStats, []string) {
+// parallel, and returns the mismatches (at most 30 described). With progress
+// set it also logs each mismatch and each finished zone as it goes (visible
+// with -v), so a long run that is stopped early still leaves a record.
+func sweep(t *testing.T, zones []string, windows func(zone string) [][2]int, exprs func(zone string, i int) []string, progress bool) (*sweepStats, []string) {
 	var st sweepStats
 	var mu sync.Mutex
 	var bad []string
-	var nbad atomic.Int64
+	var nbad, ndone atomic.Int64
 	jobs := make(chan string)
 	var wg sync.WaitGroup
 	for w := 0; w < runtime.GOMAXPROCS(0); w++ {
@@ -154,13 +156,20 @@ func sweep(t *testing.T, zones []string, windows func(zone string) [][2]int, exp
 						st.fast.Add(int64(fn.fastCalls))
 						st.real.Add(int64(fn.realCalls))
 						if !ok {
+							msg := fmt.Sprintf("%-18s %-32s from %d-%02d: %s", e, z, win[0], win[1], describeDiff(lib, fast, loc))
+							if progress {
+								t.Logf("MISMATCH %s", msg)
+							}
 							if nbad.Add(1) <= 30 {
 								mu.Lock()
-								bad = append(bad, fmt.Sprintf("%-18s %-32s from %d-%02d: %s", e, z, win[0], win[1], describeDiff(lib, fast, loc)))
+								bad = append(bad, msg)
 								mu.Unlock()
 							}
 						}
 					}
+				}
+				if progress {
+					t.Logf("zone %d/%d done: %s (%d walks, %d mismatches so far)", ndone.Add(1), len(zones), z, st.windows.Load(), nbad.Load())
 				}
 			}
 		}()
@@ -197,7 +206,7 @@ func TestWalkMatchesLibraryInEveryZone(t *testing.T) {
 				out = append(out, e)
 			}
 			return out
-		})
+		}, false)
 	for _, b := range bad {
 		t.Error(b)
 	}
@@ -213,12 +222,15 @@ func fnv32(s string) uint32 {
 
 // The exhaustive sweep: every zone, a window from every January 1970–2199
 // (and, with TIDE_SWEEP_MONTHS=all, from every month), every expression
-// above. Off by default; run it with
+// above. It takes hours of CPU (about 35 s of one core per zone with
+// daylight saving), so it is off by default and not part of npm test; the
+// sampled test above is the gate. Run it with
 //
 //	TIDE_SWEEP=1 go test ./internal/almanac -run TestWalkSweepExhaustive -timeout 0 -v
 //
 // TIDE_SWEEP_ZONES (comma-separated), TIDE_SWEEP_YEARS (from-to) and
-// TIDE_SWEEP_EXPRS (semicolon-separated) narrow it.
+// TIDE_SWEEP_EXPRS (semicolon-separated) narrow it. With -v it logs each
+// mismatch and each finished zone as it goes.
 func TestWalkSweepExhaustive(t *testing.T) {
 	if os.Getenv("TIDE_SWEEP") == "" {
 		t.Skip("set TIDE_SWEEP=1 to run the exhaustive sweep")
@@ -248,7 +260,7 @@ func TestWalkSweepExhaustive(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	st, bad := sweep(t, zones, func(string) [][2]int { return wins }, func(string, int) []string { return exprs })
+	st, bad := sweep(t, zones, func(string) [][2]int { return wins }, func(string, int) []string { return exprs }, true)
 	for _, b := range bad {
 		t.Error(b)
 	}
