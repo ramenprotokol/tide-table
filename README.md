@@ -2,6 +2,8 @@
 
 **Paste a cron expression; see the next year of firings as an almanac across time zones.**
 
+**Live:** https://tide-table.pages.dev
+
 ![Tide Table in the light theme: the expression 30 2 * * *, its plain-English reading, and the first plate, whose year strip has labelled red seams in October (02:30 skipped) and April (02:30 twice), with the engraved 24-hour dial beside it](docs/screenshot.png)
 
 Tide Table reads a cron schedule the way a tide table reads the sea: twelve month columns, a fine tick for every firing, and a plain sentence for what it does. Where daylight saving tears the schedule, a red seam runs across the page. That is the day a job is skipped because its time never happens, or runs twice because its time happens twice, or reads an hour earlier or later on someone else's clock.
