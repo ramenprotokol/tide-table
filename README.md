@@ -108,7 +108,7 @@ With the slim tz data that `time/tzdata` embeds, Go 1.26.4's `Time.ZoneBounds` r
   The build is reproducible (`-trimpath -buildvcs=false`): a fresh clone with the same Go version produced the same bytes and the same hashed name. Your host decides the compression. The colophon on the page reports what actually came over the network on your visit, read from the browser's resource timing.
 - **Speed.** The page shows how long the engine took for the current request and how many firings it walked, measured on your device. There is no speed claim anywhere else.
 - **Loading.** The engine loads in a Web Worker behind a dial-and-gauge loading state with a byte count (in KiB). The page stays responsive while it computes, and a busy line appears when a compute takes more than a quarter of a second.
-- **Caching.** Every asset except `index.html` has a content hash in its name and is served `immutable` for a year. `index.html` has no max-age.
+- **Caching.** Every script, stylesheet, font and the engine (everything under `a/`) has a content hash in its name and is served `immutable` for a year. `index.html`, the favicon and the licence texts keep fixed names and have no max-age.
 
 ### Caps on the work
 
@@ -144,7 +144,7 @@ npm run serve     # serve dist/ on a free local port, with the production header
 
 ## Running on Cloudflare (free)
 
-It's a static site: `dist/` is 15 files, and the largest, the engine, is about 3.9 MiB. Pages' free plan allows 25 MiB per file and 20,000 files, with unlimited static requests. There is no Worker, no storage and no API call. `dist/_headers` sets a strict Content-Security-Policy and the cache rules above.
+It's a static site: `dist/` is 15 files, and the largest, the engine, is about 3.8 MiB. Pages' free plan allows 25 MiB per file and 20,000 files, with unlimited static requests. There is no Worker, no storage and no API call. `dist/_headers` sets a strict Content-Security-Policy and the cache rules above.
 
 For readers deploying their own copy, the plain command is:
 
