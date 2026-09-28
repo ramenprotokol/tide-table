@@ -4,7 +4,8 @@ export class Engine {
   constructor({ onProgress } = {}) {
     this.onProgress = onProgress ?? (() => {});
     this.seq = 0;
-    this.pending = new Map();
+    this.inflight = null; // the request the worker is computing
+    this.queued = null; // the newest request waiting for it
     this.worker = null;
     this.ready = null;
   }
@@ -26,9 +27,10 @@ export class Engine {
         else if (m.type === 'ready') resolve(m);
         else if (m.type === 'failed') reject(new Error(m.message));
         else if (m.type === 'result') {
-          const p = this.pending.get(m.id);
-          if (!p) return;
-          this.pending.delete(m.id);
+          const p = this.inflight;
+          if (!p || p.id !== m.id) return;
+          this.inflight = null;
+          this.send();
           if (m.error) p.reject(new Error(m.error));
           else p.resolve({ result: JSON.parse(m.json), ms: m.ms, stale: m.id !== this.seq });
         }
@@ -42,12 +44,24 @@ export class Engine {
   }
 
   // compute resolves with { result, ms, stale }; stale is true when a newer
-  // request was made before this one finished.
+  // request was made before this one finished. The worker computes one
+  // request at a time and can't be interrupted, so only the newest request
+  // waits for it: an older one still waiting is dropped, resolving at once
+  // with { result: null, stale: true, superseded: true }.
   compute({ expr, zones, mode, from, now = Date.now() }) {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ id, expr, zones, mode, from, now });
+      this.queued?.resolve({ result: null, ms: 0, stale: true, superseded: true });
+      this.queued = { id, msg: { id, expr, zones, mode, from, now }, resolve, reject };
+      this.send();
     });
+  }
+
+  // Sends the waiting request if the worker is free.
+  send() {
+    if (this.inflight || !this.queued) return;
+    this.inflight = this.queued;
+    this.queued = null;
+    this.worker.postMessage(this.inflight.msg);
   }
 }

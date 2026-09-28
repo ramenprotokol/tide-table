@@ -153,6 +153,66 @@ test('the almanac works in a real browser', { skip: plan.skip, timeout: 180000 }
         assert.match(await page.evaluate(`document.getElementById('summary').textContent`), /525,600 firings/);
       }));
 
+    await t.test('a burst of heavy link changes computes the last one, not every one', () =>
+      withPage(chrome, base, { width: 1280, height: 800 }, '', async (page) => {
+        // Heavy: every minute in three zones, each on its own clock, in years
+        // past 2037 (where Go's slim tz data is slowest).
+        const heavy = (year) => `e=${encodeURIComponent('* * * * *')}&z=Pacific/Chatham,America/Santiago,Australia/Lord_Howe&m=each&f=${year}-01`;
+        const settled = (year) => `document.getElementById('busy').hidden && document.getElementById('summary').textContent.includes('from January ${year} through December ${year}')`;
+        // Count the requests that reach the worker. The engine's worker already
+        // exists, and postMessage is looked up on the prototype at each call.
+        await page.evaluate(`(() => {
+          const post = Worker.prototype.postMessage;
+          window.__posted = [];
+          Worker.prototype.postMessage = function (m) { window.__posted.push(m.from); return post.apply(this, arguments); };
+          return true;
+        })()`);
+
+        // One heavy change on its own, for scale.
+        let t0 = Date.now();
+        await page.evaluate(`location.hash = ${JSON.stringify(heavy(2193))}`);
+        await page.waitFor(settled(2193), 60000);
+        const single = Date.now() - t0;
+
+        // Six rapid changes, 50 ms apart: each one starts a compute.
+        await page.evaluate(`window.__posted = []`);
+        t0 = Date.now();
+        await page.evaluate(`(async () => {
+          for (const y of [2194, 2195, 2196, 2197, 2198, 2199]) {
+            location.hash = ${JSON.stringify(heavy('YEAR'))}.replace('YEAR', y);
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          return true;
+        })()`);
+        await page.waitFor(settled(2199), 120000);
+        const burst = Date.now() - t0;
+        t.diagnostic(`one heavy change settled in ${single} ms; six rapid heavy changes settled in ${burst} ms`);
+
+        // Only the request in flight and the newest reached the worker.
+        assert.deepEqual(await page.evaluate(`window.__posted`), ['2194-01', '2199-01']);
+        assert.ok(burst < 3.5 * single, `six changes took ${burst} ms, one took ${single} ms`);
+        // The page shows the last link, with no error for the dropped ones.
+        const r = await page.evaluate(`({
+          hash: location.hash,
+          from: document.getElementById('from').value,
+          sentence: document.getElementById('sentence').textContent,
+          summary: document.getElementById('summary').textContent,
+          plates: document.querySelectorAll('.plate').length,
+          zones: [...document.querySelectorAll('.zone-row input')].map((e) => e.value),
+          errors: [...document.querySelectorAll('.error')].filter((e) => !e.hidden).length,
+          stale: document.getElementById('almanac').classList.contains('stale'),
+        })`);
+        assert.match(r.hash, /f=2199-01/);
+        assert.equal(r.from, '2199-01');
+        assert.match(r.sentence, /^Every minute/);
+        assert.match(r.summary, /[\d,]+ firings from January 2199 through December 2199 on Pacific\/Chatham’s calendar/);
+        assert.doesNotMatch(r.summary, /engine stopped/);
+        assert.equal(r.plates, 3);
+        assert.deepEqual(r.zones, ['Pacific/Chatham', 'America/Santiago', 'Australia/Lord_Howe']);
+        assert.equal(r.errors, 0);
+        assert.equal(r.stale, false);
+      }));
+
     await t.test('Lord Howe: the half-hour quirk is explained, not called a missing time', () =>
       withPage(chrome, base, { width: 1280, height: 800 }, '#e=0%2012%20*%20*%20*&z=Australia/Lord_Howe&m=shared&f=2026-09', async (page) => {
         const r = await page.evaluate(`[...document.querySelectorAll('.plate .seam-item.red p')].map((p) => p.textContent)`);

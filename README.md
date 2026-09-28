@@ -109,7 +109,7 @@ With the slim tz data that `time/tzdata` embeds, Go 1.26.4's `Time.ZoneBounds` r
 
   The build is reproducible (`-trimpath -buildvcs=false`): a fresh clone with the same Go version produced the same bytes and the same hashed name. Your host decides the compression. The colophon on the page reports what actually came over the network on your visit, read from the browser's resource timing.
 - **Speed.** The page shows how long the engine took for the current request and how many firings it walked, measured on your device. There is no speed claim anywhere else.
-- **Loading.** The engine loads in a Web Worker behind a dial-and-gauge loading state with a byte count (in KiB). The page stays responsive while it computes, and a busy line appears when a compute takes more than a quarter of a second.
+- **Loading.** The engine loads in a Web Worker behind a dial-and-gauge loading state with a byte count (in KiB). The page stays responsive while it computes, and a busy line appears when a compute takes more than a quarter of a second. The worker computes one request at a time and can't be interrupted, so while it's busy only the newest request waits: an older one still waiting is dropped without being computed. A burst of edits or link changes therefore costs at most two computes, the one already running and the last.
 - **Caching.** Every script, stylesheet, font and the engine (everything under `a/`) has a content hash in its name and is served `immutable` for a year. `index.html`, the favicon and the licence texts keep fixed names and have no max-age.
 
 ### Caps on the work
@@ -139,8 +139,9 @@ npm run serve     # serve dist/ on a free local port, with the production header
   - `node --test "tests/*.test.mjs"`:
     - `smoke`: the built files, hashes and headers, the third-party notices, and the WebAssembly engine booted in Node, returning firings for every preset and for the Chatham loop;
     - `render`: the SVG helpers;
+    - `engine`: the worker client, with a fake worker, keeping one request in flight and only the newest waiting;
     - `contrast`: WCAG AA from the CSS tokens in both themes, and red used only for daylight-saving marks;
-    - `browser`: real headless Chrome through the DevTools protocol, covering no console errors or CSP violations, error messages, presets, URL state, the copy button (with clipboard permission granted, and the selected-text fallback without it), the busy line, the seam labels and dial placement, keyboard order, a true 400 px phone viewport in both themes, and reduced motion.
+    - `browser`: real headless Chrome through the DevTools protocol, covering no console errors or CSP violations, error messages, presets, URL state, the copy button (with clipboard permission granted, and the selected-text fallback without it), the busy line, a burst of six heavy link changes (only the first and the last reach the engine, and the page shows the last), the seam labels and dial placement, keyboard order, a true 400 px phone viewport in both themes, and reduced motion.
 - **`REQUIRE_BROWSER=1`** makes a missing Chrome a failure instead of a skip. Set it in CI.
 - **`go generate ./...`** regenerates the zone list after a Go upgrade. A test fails if it's stale.
 
