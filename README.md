@@ -147,7 +147,7 @@ npm run serve     # serve dist/ on a free local port, with the production header
 
 ## Running on Cloudflare (free)
 
-It's a static site: `dist/` is 15 files, and the largest, the engine, is about 3.8 MiB. Pages' free plan allows 25 MiB per file and 20,000 files, with unlimited static requests. There is no Worker, no storage and no API call. `dist/_headers` sets a strict Content-Security-Policy and the cache rules above.
+It's a static site: `dist/` is 15 files, and the largest, the engine, is about 3.8 MiB. Pages' free plan allows 25 MiB per file and 20,000 files, with unlimited static requests. There is no Worker, no storage and no API call. `dist/_headers` sets a strict Content-Security-Policy, `Cross-Origin-Opener-Policy: same-origin` (a page that opens this one in a window gets no handle to it) and the cache rules above.
 
 For readers deploying their own copy, the plain command is:
 

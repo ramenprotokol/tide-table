@@ -70,6 +70,9 @@ test('headers: strict CSP, long caching only for hashed files', () => {
   assert.match(csp, /script-src 'self' 'wasm-unsafe-eval'/);
   assert.ok(!csp.includes('unsafe-inline'), 'no unsafe-inline');
   assert.ok(!/'unsafe-eval'/.test(csp), 'no unsafe-eval');
+  // A page that opens this one in a window keeps no handle to it (so it
+  // can't drive the hash); the site opens no windows itself.
+  assert.equal(page['cross-origin-opener-policy'], 'same-origin');
   assert.equal(page['cache-control'], undefined, 'index.html is not given a max-age');
   assert.match(headersFor(rules, '/a/tide.0123456789.wasm')['cache-control'], /max-age=31536000, immutable/);
   for (const r of rules) {
